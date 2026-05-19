@@ -6,12 +6,15 @@ Simulates feedback from a panel of policy audience personas.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from paper_review_toolkit.engines.types import Category, Finding, Severity, Tone
 from paper_review_toolkit.llm import LLMClient, get_client
+
+logger = logging.getLogger(__name__)
 
 
 class CustomerType(str, Enum):
@@ -30,7 +33,7 @@ class CustomerType(str, Enum):
     TECH_COMPANY_POLICY_MANAGER = "Tech Company Policy Manager"
 
 
-PERSONA_PROMPTS = {
+PERSONA_PROMPTS: dict[CustomerType, str] = {
     CustomerType.CONGRESSIONAL_STAFFER: """You are a Congressional Staffer reviewing policy papers.
 Your focus: Briefing utility, partisan risks, citable evidence.
 Decision context: "What do I tell my boss?"
@@ -41,20 +44,45 @@ Your focus: Implementation feasibility, budget implications, authorities.
 Decision context: "Can we implement this?"
 Assess whether recommendations are actionable within existing authorities and resources.""",
 
-    CustomerType.THINK_TANK_DIRECTOR: """You are a Think Tank Director reviewing policy papers.
-Your focus: Intellectual contribution, methodological rigor, field positioning.
-Decision context: Competitive/collaborative intelligence.
-Assess whether this advances the field and would be worth amplifying.""",
+    CustomerType.HILL_COMMITTEE_COUNSEL: """You are a Hill Committee Counsel reviewing policy papers.
+Your focus: Legal authority, precedent, drafting implications.
+Decision context: "Can we write this legally?"
+Assess whether recommendations have clear legal grounding and can be drafted into legislation.""",
+
+    CustomerType.WHITE_HOUSE_NSC_STAFF: """You are White House NSC Staff reviewing policy papers.
+Your focus: Interagency equities, POTUS decision utility, strategic implications.
+Decision context: "What are the options for the President?"
+Assess whether this provides actionable options across the interagency process.""",
+
+    CustomerType.STATE_LOCAL_OFFICIAL: """You are a State/Local Official reviewing policy papers.
+Your focus: Federalism implications, unfunded mandates, local capacity.
+Decision context: "What does this cost us?"
+Assess how federal policy recommendations affect state and local implementation.""",
 
     CustomerType.FOUNDATION_PROGRAM_OFFICER: """You are a Foundation Program Officer reviewing policy papers.
 Your focus: Theory of change, measurable outcomes, field fit.
 Decision context: Investment evaluation.
 Assess whether findings support fundable initiatives.""",
 
+    CustomerType.THINK_TANK_DIRECTOR: """You are a Think Tank Director reviewing policy papers.
+Your focus: Intellectual contribution, methodological rigor, field positioning.
+Decision context: Competitive/collaborative intelligence.
+Assess whether this advances the field and would be worth amplifying.""",
+
+    CustomerType.FOREIGN_MINISTRY_DESK_OFFICER: """You are a Foreign Ministry Desk Officer reviewing policy papers.
+Your focus: Country relevance, diplomatic implications, briefing utility.
+Decision context: "How do I brief my Ambassador?"
+Assess whether this provides useful intelligence for bilateral relations.""",
+
     CustomerType.INDUSTRY_ASSOCIATION_EXECUTIVE: """You are an Industry Association Executive reviewing policy papers.
 Your focus: Regulatory ammunition, member consensus fit.
 Decision context: Comment letters, testimony preparation.
 Assess whether this supports or threatens member interests.""",
+
+    CustomerType.ADVOCACY_ORGANIZATION_DIRECTOR: """You are an Advocacy Organization Director reviewing policy papers.
+Your focus: Deployable evidence, opponent-proof arguments, localizable messaging.
+Decision context: Campaign materials.
+Assess whether this provides ammunition for advocacy campaigns.""",
 
     CustomerType.TECH_COMPANY_POLICY_MANAGER: """You are a Tech Company Policy Manager reviewing policy papers.
 Your focus: Regulatory impact, product implications, competitive positioning.
@@ -99,6 +127,7 @@ class ReviewerOutput:
     strengths: list[str] = field(default_factory=list)
     verdict: str = ""
     utility_score: int | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -152,6 +181,8 @@ async def run_single_reviewer(
     Returns:
         ReviewerOutput with concerns and assessment.
     """
+    logger.info("Starting review: %s", reviewer_name)
+
     prompt = f"""Review this policy paper:
 
 {text}
@@ -174,13 +205,25 @@ Provide your review in JSON format with:
             max_tokens=4096,
             temperature=0.4,
         )
-    except Exception:
+    except ValueError as e:
+        logger.error("JSON parsing failed for %s: %s", reviewer_name, e, exc_info=True)
         return ReviewerOutput(
             reviewer=reviewer_name,
             reviewer_type="error",
             concerns=[],
             strengths=[],
-            verdict="Review failed",
+            verdict="Review failed: invalid response format",
+            error=str(e),
+        )
+    except Exception as e:
+        logger.error("Review failed for %s: %s", reviewer_name, e, exc_info=True)
+        return ReviewerOutput(
+            reviewer=reviewer_name,
+            reviewer_type="error",
+            concerns=[],
+            strengths=[],
+            verdict=f"Review failed: {type(e).__name__}",
+            error=str(e),
         )
 
     concerns = []
@@ -210,6 +253,8 @@ Provide your review in JSON format with:
         ))
         concern_id_counter += 1
 
+    logger.info("Review complete: %s, %d concerns", reviewer_name, len(concerns))
+
     return ReviewerOutput(
         reviewer=reviewer_name,
         reviewer_type="policy_customer" if reviewer_name in [ct.value for ct in CustomerType] else "analyst",
@@ -238,6 +283,9 @@ async def run_policy_review_sim(
 
     Returns:
         Tuple of (PolicyReviewResult, list of Findings for merge).
+
+    Raises:
+        ValueError: If document is too short.
     """
     if len(text.split()) < 200:
         raise ValueError("Document too short for review (minimum 200 words)")
@@ -249,15 +297,27 @@ async def run_policy_review_sim(
         run_single_reviewer(text, "Adversarial Policy Analyst", ADVERSARIAL_ANALYST_PROMPT, client, focus, context),
     ]
 
+    valid_customers: list[str] = []
+    invalid_customers: list[str] = []
+
     if customers:
         for customer_name in customers[:5]:
             try:
                 customer_type = CustomerType(customer_name)
-                prompt = PERSONA_PROMPTS.get(customer_type, PERSONA_PROMPTS[CustomerType.THINK_TANK_DIRECTOR])
+                prompt = PERSONA_PROMPTS[customer_type]
                 tasks.append(run_single_reviewer(text, customer_name, prompt, client, focus, context))
+                valid_customers.append(customer_name)
             except ValueError:
-                pass
+                invalid_customers.append(customer_name)
 
+        if invalid_customers:
+            valid_names = [ct.value for ct in CustomerType]
+            logger.warning(
+                "Invalid customer names ignored: %s. Valid options: %s",
+                invalid_customers, valid_names
+            )
+
+    logger.info("Starting policy review with %d reviewers", len(tasks))
     results = await asyncio.gather(*tasks)
 
     policy_result = PolicyReviewResult(reviewers=list(results))
@@ -279,4 +339,5 @@ async def run_policy_review_sim(
                 tone_hint=concern.tone,
             ))
 
+    logger.info("Policy review complete: %d findings", len(findings))
     return policy_result, findings

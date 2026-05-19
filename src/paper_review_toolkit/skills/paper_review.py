@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from paper_review_toolkit.engines.engine import merge_findings
 from paper_review_toolkit.engines.rubric import check_rubric, rewrite_needed

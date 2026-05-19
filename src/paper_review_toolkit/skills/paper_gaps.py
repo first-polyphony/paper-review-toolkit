@@ -6,13 +6,14 @@ using the Toulmin argumentation model.
 
 from __future__ import annotations
 
-import asyncio
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from paper_review_toolkit.engines.types import Category, Finding, Severity, Tone
 from paper_review_toolkit.llm import LLMClient, get_client
+
+logger = logging.getLogger(__name__)
 
 
 class GapType(str, Enum):
@@ -113,10 +114,12 @@ async def analyze_document(
     Returns:
         GapAnalysisResult with identified gaps.
     """
-    if len(text.split()) < 50:
+    word_count = len(text.split())
+    if word_count < 50:
         raise ValueError("Document too short for gap analysis (minimum 50 words)")
 
     if len(text) > 50000:
+        logger.warning("Document truncated from %d to 50000 chars", len(text))
         text = text[:50000]
 
     if title is None:
@@ -129,6 +132,7 @@ async def analyze_document(
             title = "Untitled Document"
 
     client = client or get_client()
+    logger.info("Starting gap analysis: %s (%d words)", title, word_count)
 
     prompt = f"""Analyze this document for argumentation gaps:
 
@@ -173,6 +177,8 @@ Identify all gaps and respond with JSON containing:
         strength = EvidenceStrength(response.get("overall_evidence_strength", "moderate"))
     except ValueError:
         strength = EvidenceStrength.MODERATE
+
+    logger.info("Gap analysis complete: %d gaps found", len(gaps))
 
     return GapAnalysisResult(
         title=title,
