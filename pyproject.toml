@@ -37,8 +37,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR-ORG/paper-review-toolkit"
-Repository = "https://github.com/YOUR-ORG/paper-review-toolkit"
+Homepage = "https://github.com/first-polyphony/paper-review-toolkit"
+Repository = "https://github.com/first-polyphony/paper-review-toolkit"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -22,7 +22,7 @@ This toolkit provides:
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR-ORG/paper-review-toolkit.git
+git clone https://github.com/first-polyphony/paper-review-toolkit.git
 cd paper-review-toolkit
 
 # Create virtual environment
