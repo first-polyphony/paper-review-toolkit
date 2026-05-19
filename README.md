@@ -1,6 +1,6 @@
 # Paper Review Toolkit
 
-A Claude Code skill for comprehensive academic paper review using multi-persona simulation and argumentation analysis.
+A Claude Code skill for comprehensive paper review using multi-persona simulation and argumentation analysis.
 
 ## Overview
 
